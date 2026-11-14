@@ -115,6 +115,7 @@ typedef struct {
     int primed;
     int saw; /* this copy has played from the shared read */
     int saw_source; /* an old project set SOURCE; switch defaults must not add Main on top */
+    int mix_owned; /* the switches or a saved project own the row; SOURCE must not replace it */
     int switches_live; /* host audio has started, so a switch move is the player, not a default */
     char v[TXT], dev[TXT], claim[TXT], rel[TXT], mid[TXT], logst[TXT];
     cap_t *cap;
@@ -1798,14 +1799,34 @@ static void set_param(void *inst, const char *key, const char *val) {
     } else if (!strcmp(key, "cap_latency")) {
         if (P->cap) cap_set_latency(P->cap, (int)atof(val));
     } else if (!strcmp(key, "pair") || !strcmp(key, "source")) {
-        int n = (int)atof(val);
-        int lim = src_lim();
+        int n, lim;
+        /* The meter refresh tells the screen about SOURCE. The host writes that
+         * value back, and it used to replace every switch with just the first one. */
+        if (P->mix_owned) return;
+        n = (int)atof(val);
+        lim = src_lim();
         if (n < 0) n = 0;
         if (n >= lim) n = lim - 1;
         atomic_store_explicit(&P->mix, 1u << n, memory_order_relaxed);
         P->saw_source = 1;
         pthread_mutex_lock(&P->lock);
         snprintf(P->rel, TXT, "%s", src_name(n));
+        pthread_mutex_unlock(&P->lock);
+        if (P->active) use_apply(P);
+    } else if (!strcmp(key, "state")) {
+        unsigned mix = 0;
+        int level = 100, lim;
+        if (sscanf(val, "v1 %x %d", &mix, &level) != 2) return;
+        lim = src_lim();
+        if (lim < 32) mix &= (1u << lim) - 1u;
+        if (level < 0) level = 0;
+        if (level > 100) level = 100;
+        atomic_store_explicit(&P->mix, mix, memory_order_relaxed);
+        atomic_store_explicit(&P->level, level, memory_order_relaxed);
+        P->mix_owned = 1;
+        P->saw_source = 1;
+        pthread_mutex_lock(&P->lock);
+        mix_label(mix, P->rel, TXT);
         pthread_mutex_unlock(&P->lock);
         if (P->active) use_apply(P);
     } else {
@@ -1822,6 +1843,7 @@ static void set_param(void *inst, const char *key, const char *val) {
             if (on) m |= 1u << sw;
             else m &= ~(1u << sw);
             atomic_store_explicit(&P->mix, m, memory_order_relaxed);
+            P->mix_owned = 1;
             pthread_mutex_lock(&P->lock);
             mix_label(m, P->rel, TXT);
             pthread_mutex_unlock(&P->lock);
@@ -1892,6 +1914,11 @@ static int get_param(void *inst, const char *key, char *buf, int buf_len) {
         return mix_label(m, buf, buf_len), (int)strlen(buf);
     } else if (!strcmp(key, "level")) {
         return snprintf(buf, buf_len, "%d", atomic_load_explicit(&P->level, memory_order_relaxed));
+    } else if (!strcmp(key, "state")) {
+        uint32_t m = atomic_load_explicit(&P->mix, memory_order_relaxed);
+        int lim = src_lim();
+        if (lim < 32) m &= (1u << lim) - 1u;
+        return snprintf(buf, buf_len, "v1 %x %d", m, atomic_load_explicit(&P->level, memory_order_relaxed));
     } else if (!strcmp(key, "meter")) {
         int m = atomic_load_explicit(&P->meter, memory_order_relaxed);
         if (m < 0) m = 0;

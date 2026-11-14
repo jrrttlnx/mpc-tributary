@@ -486,6 +486,11 @@ int main(void) {
         e->get_param(fresh, "srcname", r[0], 64);
         check(strstr(r[0], "main") && strstr(r[0], "track 5"),
               "main can be added once the project is playing");
+        e->set_param(fresh, "source", "0");
+        e->get_param(fresh, "s0", r[0], 64);
+        e->get_param(fresh, "s5", r[1], 64);
+        check(!strcmp(r[0], "1") && !strcmp(r[1], "1"),
+              "a later SOURCE write does not clear the switches");
         g_dev = dt;
         e->get_param(fresh, "s0_name", r[0], 64);
         e->get_param(fresh, "s9_name", r[1], 64);
@@ -548,7 +553,28 @@ int main(void) {
 
     char buf[64] = "";
     check(e->get_param(inst, "run", buf, sizeof buf) == 0, "trigger key has no readout text");
-    check(e->get_param(inst, "state", buf, sizeof buf) == 0, "no state chunk is saved");
+    {
+        void *saved = e->create(NULL);
+        void *loaded;
+        e->set_param(saved, "s0", "0");
+        e->set_param(saved, "s2", "1");
+        e->set_param(saved, "s5", "1");
+        e->set_param(saved, "level", "40");
+        check(e->get_param(saved, "state", buf, sizeof buf) > 0, "the project can store the switches");
+        loaded = e->create(NULL);
+        e->set_param(loaded, "state", buf);
+        e->set_param(loaded, "source", "0");
+        e->set_param(loaded, "s0", "1");
+        e->set_param(loaded, "s2", "0");
+        e->get_param(loaded, "s0", r[0], 64);
+        e->get_param(loaded, "s2", r[1], 64);
+        e->get_param(loaded, "s5", r[2], 64);
+        e->get_param(loaded, "level", r[3], 64);
+        check(!strcmp(r[0], "0") && !strcmp(r[1], "1") && !strcmp(r[2], "1") && !strcmp(r[3], "40"),
+              "a reloaded project keeps the switches and the level");
+        e->destroy(saved);
+        e->destroy(loaded);
+    }
 
     e->destroy(inst);
     printf("%s (%d failure%s)\n", failures ? "FAILED" : "ALL PASSED", failures, failures == 1 ? "" : "s");
